@@ -1,45 +1,66 @@
-import express, { json, raw } from "express";
-import { WebSocketServer, WebSocket, RawData } from "ws";
+import express from "express";
+import { run } from "./db";
+import { WebSocketServer, WebSocket } from "ws";
+import { clients } from "./utils/globalClient";
+import {
+  sendMessageToGroupMembers,
+  sendMessageToUser,
+  CreateGroup,
+} from "./helper";
+import { GroupMembersMessagePayload, MessagePayload } from "./types/MessageInput";
+import { Add_Members } from "./helper/chatService";
 
 const app = express();
-const httpServer = app.listen(8080);
+const httpServer = app.listen(8080, () => {
+  console.log("WebSocket server is running on ws://localhost:8080");
+});
 
+run(); // Connecting to the database
 const wss = new WebSocketServer({ server: httpServer });
 
-// Client connections object
-const clients: {
-  [key: string]: WebSocket;
-} = {};
-
-// Connectng function
-wss.on("connection", (ws, req) => {
-  let userId: number;
-  userId = Math.floor(Math.random() * 10000); // User sends their ID on connection
+// Connection function
+wss.on("connection", (ws: WebSocket, req) => {
+  const userId = Math.floor(Math.random() * 1000000); // Generate a userId for the client
   clients[userId] = ws; // Map WebSocket to this userId
+
+  // Notify the client that they are connected
   ws.send(`You are connected as user ${userId}`);
 
   // Handle incoming messages
-  ws.on("message", (message: string) => {
+  ws.on("message", (data) => {
+    const message = data.toString(); // Convert Buffer to string
     let parsedMessage;
+    let parsedPayloadMessage;
+    let parsedGroupPayload;
 
     try {
       parsedMessage = JSON.parse(message);
-    } catch (error) {
-      ws.send("Invalid message format");
-      return;
-    }
 
-    switch (parsedMessage.type) {
-      case "private_message":
-        sendMessageToUser(
-          parsedMessage.from,
-          parsedMessage.to,
-          parsedMessage.content
-        );
-        break;
-
-      default:
-        ws.send("Unknown message type");
+      // Validate and parse payloads based on message type
+      if (parsedMessage.type === "private_message") {
+        parsedPayloadMessage = MessagePayload.safeParse(parsedMessage);
+        if (parsedPayloadMessage.success) {
+          handlePrivateMessage(parsedPayloadMessage.data, ws);
+        } else {
+          ws.send("Invalid private message payload.");
+        }
+      } else if (
+        parsedMessage.type === "create_group" ||
+        parsedMessage.type === "add_members" ||
+        parsedMessage.type === "group_message"
+      ) {
+        parsedGroupPayload = GroupMembersMessagePayload.safeParse(parsedMessage);
+        if (parsedGroupPayload.success) {
+          handleGroupMessage(parsedGroupPayload.data, ws);
+        } else {
+          ws.send("Invalid group message payload.");
+        }
+      } else {
+        ws.send("Unknown message type.");
+      }
+    } catch (error: any) {
+      ws.send("Invalid message format.");
+      console.error("Message parsing error:", error);
     }
   });
 
@@ -50,25 +71,75 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-// Function to send a message to a specific user
+// Helper function to handle private messages
+function handlePrivateMessage(parsedPayload: any, ws: WebSocket) {
+  sendMessageToUser(
+    parsedPayload.from,
+    parsedPayload.to,
+    parsedPayload.content
+  );
+}
 
-function sendMessageToUser(
-  fromUserID: number,
-  toUserId: number,
-  messageContent: string
-) {
-  const recipientSocket = clients[toUserId];
+// Helper function to handle group messages
+function handleGroupMessage(parsedGroupPayload: any, ws: WebSocket) {
+  switch (parsedGroupPayload.type) {
+    case "create_group":
+      handleCreateGroup(parsedGroupPayload, ws);
+      break;
 
-  if (recipientSocket) {
-    recipientSocket.send(
-      JSON.stringify({
-        from: fromUserID, // You can customize this field
-        content: messageContent,
-      })
-    );
-  } else {
-    console.log(`User ${toUserId} is not connected.`);
+    case "add_members":
+      handleAddMembers(parsedGroupPayload, ws);
+      break;
+
+    case "group_message":
+      sendMessageToGroupMembers(
+        parsedGroupPayload.from,
+        parsedGroupPayload.to,
+        parsedGroupPayload.content
+      );
+      break;
+
+    default:
+      ws.send("Unknown group message type");
   }
 }
 
-console.log("WebSocket server is running on ws://localhost:8080");
+// Helper function to handle group creation
+async function handleCreateGroup(parsedGroupPayload: any, ws: WebSocket) {
+  try {
+    const isCreated = await CreateGroup(
+      parsedGroupPayload.CreatedByUserID,
+      parsedGroupPayload.GroupName,
+      parsedGroupPayload.member
+    );
+
+    if (isCreated) {
+      ws.send(`Group Created by ${parsedGroupPayload.CreatedByUserID}`);
+    } else {
+      ws.send("Error Occurred while Creating Group");
+    }
+  } catch (error) {
+    ws.send("Error during group creation process.");
+    console.error("Create group error:", error);
+  }
+}
+
+// Helper function to handle adding members to a group
+async function handleAddMembers(parsedGroupPayload: any, ws: WebSocket) {
+  try {
+    const isAdded = await Add_Members(
+      parsedGroupPayload.CreatedByUserID,
+      parsedGroupPayload.GroupName,
+      parsedGroupPayload.member
+    );
+
+    if (isAdded?.Added) {
+      ws.send(`Members Added by ${isAdded.createdBy}`);
+    } else {
+      ws.send("Error Occurred while Adding Members");
+    }
+  } catch (error) {
+    ws.send("Error during adding members process.");
+    console.error("Add members error:", error);
+  }
+}
