@@ -49,7 +49,9 @@ wss.on("connection", (ws: WebSocket, req) => {
         parsedMessage.type === "add_members" ||
         parsedMessage.type === "group_message"
       ) {
-        parsedGroupPayload = GroupMembersMessagePayload.safeParse(parsedMessage);
+        
+        
+        parsedGroupPayload = MessagePayload.safeParse(parsedMessage);
         if (parsedGroupPayload.success) {
           handleGroupMessage(parsedGroupPayload.data, ws);
         } else {
