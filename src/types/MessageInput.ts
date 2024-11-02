@@ -12,9 +12,9 @@ export const MessagePayload = z.object({
 
 export const GroupmessagePayload =z.object({
     type :z.string(),
-    CreatedByUserID:z.number(),
+    CreatedByUserID:z.string(),
     GroupName :z.string(),
-    member :z.array(z.number()).optional()
+    member :z.array(z.string()).optional()
 });
 
 

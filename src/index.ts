@@ -1,4 +1,6 @@
 import express from "express";
+import bodyParser from "body-parser";
+import cors from "cors";
 import { run } from "./db";
 import { WebSocketServer, WebSocket } from "ws";
 import { clients } from "./utils/globalClient";
@@ -7,20 +9,67 @@ import {
   sendMessageToUser,
   CreateGroup,
 } from "./helper";
-import { GroupMembersMessagePayload, MessagePayload } from "./types/MessageInput";
+import {
+  GroupMembersMessagePayload,
+  MessagePayload,
+} from "./types/MessageInput";
 import { Add_Members } from "./helper/chatService";
+import { createClient } from "redis";
+import { ErrorHandler, NotFound } from "./MIddlewares/Error_Handling";
 
 const app = express();
+origin: process.env.BASE_URL;
+const corsConfig = {};
+
 const httpServer = app.listen(8080, () => {
   console.log("WebSocket server is running on ws://localhost:8080");
 });
 
+app.use(bodyParser.json());
+app.use(cors(corsConfig));
+
 run(); // Connecting to the database
 const wss = new WebSocketServer({ server: httpServer });
 
+//Routes
+app.use(NotFound);
+app.use(ErrorHandler);
+
 // Connection function
-wss.on("connection", (ws: WebSocket, req) => {
+wss.on("connection", async (ws: WebSocket, req) => {
   const userId = Math.floor(Math.random() * 1000000); // Generate a userId for the client
+  let redisClient: any;
+  try {
+    redisClient = createClient();
+    redisClient.on("error", (err: any) =>
+      console.log("Redis Client Error", err)
+    );
+
+    await redisClient.connect();
+    console.log("Connected to Redis successfully");
+
+    // Store user info in Redis hash, where 'userConnections' is the key and userId is the field
+    await redisClient.hSet(
+      "userConnections",
+      userId.toString(),
+      JSON.stringify(ws)
+    );
+
+    await redisClient.lPush("OnlineUsers", [
+      JSON.stringify({
+        userId: userId.toString(),
+      }),
+    ]);
+
+    // // To retrieve all user connections stored in the Redis hash
+    // const ConnctedUsers = await redisClient.hGet(
+    //   "userConnections",
+    //   userId.toString()
+    // );
+  } catch (error) {
+    console.error("Failed to connect to Redis:", error); // Correct error message
+  }
+
   clients[userId] = ws; // Map WebSocket to this userId
 
   // Notify the client that they are connected
@@ -49,10 +98,12 @@ wss.on("connection", (ws: WebSocket, req) => {
         parsedMessage.type === "add_members" ||
         parsedMessage.type === "group_message"
       ) {
-        
-        
-        parsedGroupPayload = MessagePayload.safeParse(parsedMessage);
+        parsedGroupPayload =
+          GroupMembersMessagePayload.safeParse(parsedMessage);
+
         if (parsedGroupPayload.success) {
+          console.log(parsedGroupPayload.data);
+
           handleGroupMessage(parsedGroupPayload.data, ws);
         } else {
           ws.send("Invalid group message payload.");
@@ -67,8 +118,32 @@ wss.on("connection", (ws: WebSocket, req) => {
   });
 
   // Handle user disconnection
-  ws.on("close", () => {
-    console.log(`User ${userId} disconnected`);
+  ws.on("close", async () => {
+    try {
+      const Online = await redisClient.lRange("OnlineUsers", 0, -1);
+      console.log(Online);
+
+      // Check if the queue is empty
+      if (Online.length === 0) {
+        console.log("Queue is empty, no match found.");
+      } else {
+        // Loop through the online users and check the condition
+        for (const user of Online) {
+          const parsedUser = JSON.parse(user);
+
+          // Check if the userId matches
+          if (parsedUser.userId === JSON.stringify(userId)) {
+            // Remove the user from the queue
+            await redisClient.lRem("OnlineUsers", 1, user); // Remove the first occurrence
+            console.log(`User ${userId} disconnected`);
+            break; // Exit the loop after disconnecting the user
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error while accessing Redis:", error);
+    }
+
     delete clients[userId];
   });
 });
@@ -95,9 +170,9 @@ function handleGroupMessage(parsedGroupPayload: any, ws: WebSocket) {
 
     case "group_message":
       sendMessageToGroupMembers(
-        parsedGroupPayload.from,
-        parsedGroupPayload.to,
-        parsedGroupPayload.content
+        parseInt(parsedGroupPayload.CreatedByUserID),
+        parsedGroupPayload.toGroupId,
+        parsedGroupPayload.messageContent
       );
       break;
 

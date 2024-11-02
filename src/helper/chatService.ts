@@ -1,7 +1,6 @@
 import { clients, Groups } from "../utils/globalClient";
 import { GroupMessagesModel, GroupsModel, MessagesModel } from "../models";
 import mongoose from "mongoose";
-import { response } from "express";
 
 // Function to send a message to a specific user
 export async function sendMessageToUser(
@@ -42,15 +41,15 @@ export async function sendMessageToGroupMembers(
   messageContent: string
 ) {
   try {
-    const GroupDetails = await GroupsModel.findById(toGroupId)
-      .select("members")
-      .lean();
+    console.log(toGroupId);
 
-    if (
-      !GroupDetails ||
-      !GroupDetails.Members ||
-      GroupDetails.Members.length === 0
-    ) {
+    const GroupDetails = await GroupsModel.findById(toGroupId).select(
+      "Members"
+    );
+
+    console.log(GroupDetails);
+
+    if (!GroupDetails) {
       throw new Error("Group not found or has no members.");
     }
 
@@ -59,7 +58,7 @@ export async function sendMessageToGroupMembers(
 
       const memberSocket = clients[memberId];
 
-      if (memberSocket && memberSocket.readyState === WebSocket.OPEN) {
+      if (memberSocket) {
         memberSocket.send(
           JSON.stringify({
             from: ExistingMemberUserId,
@@ -72,10 +71,10 @@ export async function sendMessageToGroupMembers(
       }
     }
 
-    await MessagesModel.create({
+    await GroupMessagesModel.create({
       messageId: new mongoose.Types.ObjectId(),
       sender: ExistingMemberUserId,
-      receiverGroup: toGroupId,
+      GroupId: toGroupId,
       content: messageContent,
     });
 
@@ -141,3 +140,7 @@ export async function Add_Members(
     };
   }
 }
+
+
+
+
